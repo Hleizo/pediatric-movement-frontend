@@ -1,13 +1,13 @@
 // src/metrics.ts
-import type { Landmark, PoseFrame } from "./store";
+import type { Landmark, PoseFrameType as PoseFrame } from "./store";
 
-/** Safe landmark fetch by MediaPipe index; returns undefined if missing */
+/** Safe landmark fetch by index */
 export function L(lm: PoseFrame, i: number): Landmark | undefined {
   if (!lm || !lm[i]) return undefined;
   return lm[i];
 }
 
-/** Simple 2D angle between three points A-B-C (in degrees) */
+/** 2D angle (degrees) if you need it elsewhere */
 export function angle(A: Landmark, B: Landmark, C: Landmark): number {
   const ba = { x: A.x - B.x, y: A.y - B.y };
   const bc = { x: C.x - B.x, y: C.y - B.y };
@@ -19,16 +19,15 @@ export function angle(A: Landmark, B: Landmark, C: Landmark): number {
   return (Math.acos(c) * 180) / Math.PI;
 }
 
-/** Right arm raised? (wrist above shoulder in image coords; y smaller = higher) */
+/** Is right wrist above right shoulder? */
 export function isRightArmRaised(lm: PoseFrame): boolean | null {
-  // MediaPipe indices
   const RIGHT_WRIST = 16, RIGHT_SHOULDER = 12;
   const w = L(lm, RIGHT_WRIST), s = L(lm, RIGHT_SHOULDER);
   if (!w || !s) return null;
-  return w.y < s.y; // raised if wrist higher than shoulder
+  return w.y < s.y;
 }
 
-/** Very rough center-of-mass proxy (avg shoulders + hips) for sway */
+/** Center of mass proxy */
 export function comXY(lm: PoseFrame): { x: number; y: number } | null {
   const L_SH = 11, R_SH = 12, L_HIP = 23, R_HIP = 24;
   const a = L(lm, L_SH), b = L(lm, R_SH), c = L(lm, L_HIP), d = L(lm, R_HIP);

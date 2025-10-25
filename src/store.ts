@@ -1,35 +1,83 @@
 // src/store.ts
-// Tiny, dependency-free store for sharing pose data across components.
+import { create } from "zustand";
 
-export type Landmark = { x: number; y: number; z?: number; visibility?: number };
+/** --------- Landmark Types --------- */
+export type Landmark = { x: number; y: number; z?: number; c?: number };
 export type PoseFrame = Landmark[] | null;
 
-let _lastPose: PoseFrame = null;
-let _lastFrameAt = 0;
-let _running = false;
-let _task: "idle" | "one_leg" | "walk" | "arm_raise" = "idle";
+/** --------- Tasks & Results --------- */
+export type Task = "arm_raise_right" | "one_leg_left";
 
-export function setLastPose(lm: PoseFrame) {
-  _lastPose = lm;
-  _lastFrameAt = Date.now();
+export type Result = {
+  id: string;
+  ts: number;           // timestamp (ms)
+  task: Task;
+  value: number;        // main metric (e.g., duration seconds)
+  units: string;        // "s" or "-"
+  status: "pass" | "warn" | "fail";
+  note?: string;
+};
+
+type State = {
+  running: boolean;
+  lastPose: PoseFrame;
+  lastFrameAt: number | null;
+  history: Result[];
+
+  // setters/getters for pose
+  setRunning: (v: boolean) => void;
+  setLastPose: (lm: PoseFrame) => void;
+  setLastFrameAt: (t: number) => void;
+
+  // results
+  addResult: (r: Result) => void;
+  clearHistory: () => void;
+};
+
+// --- persistence helpers ---
+const KEY = "pm_app_history_v1";
+function loadHistory(): Result[] {
+  try {
+    const s = localStorage.getItem(KEY);
+    if (!s) return [];
+    return JSON.parse(s);
+  } catch {
+    return [];
+  }
 }
-export function getLastPose(): PoseFrame {
-  return _lastPose;
-}
-export function getLastFrameAt(): number {
-  return _lastFrameAt;
+function saveHistory(list: Result[]) {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(list));
+  } catch {}
 }
 
-export function setRunning(v: boolean) {
-  _running = v;
-}
-export function isRunning(): boolean {
-  return _running;
-}
+export const useApp = create<State>((set, get) => ({
+  running: false,
+  lastPose: null,
+  lastFrameAt: null,
+  history: loadHistory(),
 
-export function setTask(t: "idle" | "one_leg" | "walk" | "arm_raise") {
-  _task = t;
-}
-export function getTask(): "idle" | "one_leg" | "walk" | "arm_raise" {
-  return _task;
-}
+  setRunning: (v) => set({ running: v }),
+  setLastPose: (lm) => set({ lastPose: lm, lastFrameAt: Date.now() }),
+  setLastFrameAt: (t) => set({ lastFrameAt: t }),
+
+  addResult: (r) => {
+    const list = [...get().history, r].slice(-200); // cap
+    saveHistory(list);
+    set({ history: list });
+  },
+  clearHistory: () => {
+    saveHistory([]);
+    set({ history: [] });
+  },
+}));
+
+/** Shorthand getters for non-react code */
+export function getLastPose() { return useApp.getState().lastPose; }
+export function getLastFrameAt() { return useApp.getState().lastFrameAt; }
+export function addResult(r: Result) { useApp.getState().addResult(r); }
+export function getHistory() { return useApp.getState().history; }
+export function setRunning(v:boolean) { useApp.getState().setRunning(v); }
+
+/** Exported types for helpers */
+export type { PoseFrame as PoseFrameType };

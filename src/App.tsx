@@ -1,7 +1,10 @@
+// src/App.tsx
 import React, { useEffect, useRef, useState } from "react";
 import CameraPose from "./components/CameraPose";
-import { getLastPose, getLastFrameAt } from "./store";
+import ResultsCard from "./components/ResultsCard";
+import { getLastPose, getLastFrameAt, addResult } from "./store";
 import { isRightArmRaised, comXY } from "./metrics";
+import { statusForOneLeg } from "./thresholds";
 
 export default function App() {
   const [armResult, setArmResult] = useState<string>("—");
@@ -10,13 +13,29 @@ export default function App() {
   const balanceStartRef = useRef<number | null>(null);
   const comHistory = useRef<{ x: number; y: number; t: number }[]>([]);
 
+  // ---- ARM RAISE ----
   function checkRightArm() {
     const lm = getLastPose();
     const ok = isRightArmRaised(lm);
-    if (ok === null) setArmResult("No pose detected");
-    else setArmResult(ok ? "✅ Right arm raised" : "❌ Right arm not raised");
+    if (ok === null) {
+      setArmResult("No pose detected");
+      return;
+    }
+    const status = ok ? "pass" : "fail";
+    setArmResult(ok ? "✅ Right arm raised" : "❌ Right arm not raised");
+
+    addResult({
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      task: "arm_raise_right",
+      value: ok ? 1 : 0,
+      units: "-",
+      status,
+      note: ok ? "" : "Wrist not above shoulder",
+    });
   }
 
+  // ---- ONE-LEG STANCE (left leg support) ----
   const LEFT_ANKLE = 27, RIGHT_ANKLE = 28;
 
   useEffect(() => {
@@ -28,7 +47,7 @@ export default function App() {
       const la = lm[LEFT_ANKLE], ra = lm[RIGHT_ANKLE];
       if (!la || !ra) return;
 
-      const rightFootUp = ra.y < la.y - 0.03; // coarse threshold
+      const rightFootUp = ra.y < la.y - 0.03;
 
       if (balanceState === "running") {
         if (rightFootUp) {
@@ -37,12 +56,13 @@ export default function App() {
           if (c) comHistory.current.push({ ...c, t: ts });
           setBalanceTime(((ts - (balanceStartRef.current ?? ts)) / 1000) | 0);
         } else {
-          setBalanceState("idle");
-          balanceStartRef.current = null;
+          // foot dropped: stop + record result
+          stopBalanceAndSave();
         }
       }
     }, 100);
     return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [balanceState]);
 
   function startBalance() {
@@ -52,14 +72,32 @@ export default function App() {
     setBalanceState("running");
   }
 
+  function stopBalanceAndSave() {
+    setBalanceState("idle");
+    const seconds = balanceStartRef.current
+      ? ((Date.now() - balanceStartRef.current) / 1000)
+      : 0;
+    balanceStartRef.current = null;
+
+    const status = statusForOneLeg(seconds);
+    addResult({
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      task: "one_leg_left",
+      value: Math.round(seconds),
+      units: "s",
+      status,
+      note: status === "fail" ? "Right foot not held up long enough" :
+            status === "warn" ? "Borderline balance time" : "",
+    });
+  }
+
   return (
     <div className="app">
       <h1>🧠 Pediatric Movement App</h1>
 
-      {/* Camera panel */}
       <CameraPose />
 
-      {/* Cards BELOW the camera */}
       <div className="cards">
         <section className="card">
           <h3 style={{ margin: "0 0 8px" }}>Task: Raise Right Arm</h3>
@@ -81,11 +119,13 @@ export default function App() {
             {balanceState === "idle" ? (
               <button className="btn" onClick={startBalance}>Start</button>
             ) : (
-              <button className="btn" onClick={() => setBalanceState("idle")}>Stop</button>
+              <button className="btn" onClick={stopBalanceAndSave}>Stop & Save</button>
             )}
             <div>⏱ {balanceTime}s</div>
           </div>
         </section>
+
+        <ResultsCard />
       </div>
 
       <p className="muted">
