@@ -17,6 +17,8 @@ function Chip({ status }: { status: "pass" | "warn" | "fail" }) {
 
 export default function ResultsCard() {
   const history = useApp((s) => s.history);
+  const clear = useApp((s) => s.clearHistory);
+
   function downloadJSON() {
     const blob = new Blob([JSON.stringify(getHistory(), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -25,7 +27,6 @@ export default function ResultsCard() {
     a.click();
     URL.revokeObjectURL(a.href);
   }
-  const clear = useApp((s)=>s.clearHistory);
 
   return (
     <section className="card">
@@ -51,13 +52,9 @@ export default function ResultsCard() {
                     {new Date(r.ts).toLocaleTimeString()}
                   </td>
                   <td style={{ padding: "6px 4px" }}>{r.task}</td>
-                  <td style={{ padding: "6px 4px" }}>
-                    {r.value} {r.units}
-                  </td>
-                  <td style={{ padding: "6px 4px" }}>
-                    <Chip status={r.status} />
-                  </td>
-                  <td style={{ padding: "6px 4px", opacity: .8 }}>{r.note ?? ""}</td>
+                  <td style={{ padding: "6px 4px" }}>{r.value} {r.units}</td>
+                  <td style={{ padding: "6px 4px" }}><Chip status={r.status} /></td>
+                  <td style={{ padding: "6px 4px", opacity: .85 }}>{r.note ?? ""}</td>
                 </tr>
               ))}
             </tbody>

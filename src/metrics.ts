@@ -1,13 +1,12 @@
-// src/metrics.ts
-import type { Landmark, PoseFrameType as PoseFrame } from "./store";
+import type { Landmark, PoseFrame as PoseFrameType } from "./store";
 
-/** Safe landmark fetch by index */
-export function L(lm: PoseFrame, i: number): Landmark | undefined {
+/** Safe landmark read */
+export function L(lm: PoseFrameType, i: number): Landmark | undefined {
   if (!lm || !lm[i]) return undefined;
   return lm[i];
 }
 
-/** 2D angle (degrees) if you need it elsewhere */
+/** 2D angle in degrees (utility if needed later) */
 export function angle(A: Landmark, B: Landmark, C: Landmark): number {
   const ba = { x: A.x - B.x, y: A.y - B.y };
   const bc = { x: C.x - B.x, y: C.y - B.y };
@@ -19,18 +18,18 @@ export function angle(A: Landmark, B: Landmark, C: Landmark): number {
   return (Math.acos(c) * 180) / Math.PI;
 }
 
-/** Is right wrist above right shoulder? */
-export function isRightArmRaised(lm: PoseFrame): boolean | null {
+/** Right arm raised? wrist above shoulder (y smaller) */
+export function isRightArmRaised(lm: PoseFrameType): boolean | null {
   const RIGHT_WRIST = 16, RIGHT_SHOULDER = 12;
   const w = L(lm, RIGHT_WRIST), s = L(lm, RIGHT_SHOULDER);
   if (!w || !s) return null;
   return w.y < s.y;
 }
 
-/** Center of mass proxy */
-export function comXY(lm: PoseFrame): { x: number; y: number } | null {
-  const L_SH = 11, R_SH = 12, L_HIP = 23, R_HIP = 24;
-  const a = L(lm, L_SH), b = L(lm, R_SH), c = L(lm, L_HIP), d = L(lm, R_HIP);
-  if (!a || !b || !c || !d) return null;
-  return { x: (a.x + b.x + c.x + d.x) / 4, y: (a.y + b.y + c.y + d.y) / 4 };
+/** Left arm raised? wrist above shoulder (y smaller) */
+export function isLeftArmRaised(lm: PoseFrameType): boolean | null {
+  const LEFT_WRIST = 15, LEFT_SHOULDER = 11;
+  const w = L(lm, LEFT_WRIST), s = L(lm, LEFT_SHOULDER);
+  if (!w || !s) return null;
+  return w.y < s.y;
 }

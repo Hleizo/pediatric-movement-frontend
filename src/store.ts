@@ -1,19 +1,18 @@
-// src/store.ts
 import { create } from "zustand";
 
-/** --------- Landmark Types --------- */
+/** --------- Pose Types --------- */
 export type Landmark = { x: number; y: number; z?: number; c?: number };
 export type PoseFrame = Landmark[] | null;
 
 /** --------- Tasks & Results --------- */
-export type Task = "arm_raise_right" | "one_leg_left";
+export type Task = "arm_raise_right" | "arm_raise_left";
 
 export type Result = {
   id: string;
-  ts: number;           // timestamp (ms)
+  ts: number;                 // timestamp ms
   task: Task;
-  value: number;        // main metric (e.g., duration seconds)
-  units: string;        // "s" or "-"
+  value: number;              // 1/0 for pass/fail
+  units: string;              // "-" for boolean
   status: "pass" | "warn" | "fail";
   note?: string;
 };
@@ -24,31 +23,24 @@ type State = {
   lastFrameAt: number | null;
   history: Result[];
 
-  // setters/getters for pose
   setRunning: (v: boolean) => void;
   setLastPose: (lm: PoseFrame) => void;
   setLastFrameAt: (t: number) => void;
 
-  // results
   addResult: (r: Result) => void;
   clearHistory: () => void;
 };
 
-// --- persistence helpers ---
+// ---- localStorage persistence ----
 const KEY = "pm_app_history_v1";
 function loadHistory(): Result[] {
   try {
     const s = localStorage.getItem(KEY);
-    if (!s) return [];
-    return JSON.parse(s);
-  } catch {
-    return [];
-  }
+    return s ? JSON.parse(s) : [];
+  } catch { return []; }
 }
 function saveHistory(list: Result[]) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(list));
-  } catch {}
+  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch {}
 }
 
 export const useApp = create<State>((set, get) => ({
@@ -62,22 +54,16 @@ export const useApp = create<State>((set, get) => ({
   setLastFrameAt: (t) => set({ lastFrameAt: t }),
 
   addResult: (r) => {
-    const list = [...get().history, r].slice(-200); // cap
+    const list = [...get().history, r].slice(-200);
     saveHistory(list);
     set({ history: list });
   },
-  clearHistory: () => {
-    saveHistory([]);
-    set({ history: [] });
-  },
+  clearHistory: () => { saveHistory([]); set({ history: [] }); },
 }));
 
-/** Shorthand getters for non-react code */
+/** Non-hook helpers */
 export function getLastPose() { return useApp.getState().lastPose; }
 export function getLastFrameAt() { return useApp.getState().lastFrameAt; }
-export function addResult(r: Result) { useApp.getState().addResult(r); }
+export function addResult(r: Result) { return useApp.getState().addResult(r); }
 export function getHistory() { return useApp.getState().history; }
-export function setRunning(v:boolean) { useApp.getState().setRunning(v); }
-
-/** Exported types for helpers */
-export type { PoseFrame as PoseFrameType };
+export function setRunning(v: boolean) { return useApp.getState().setRunning(v); }
