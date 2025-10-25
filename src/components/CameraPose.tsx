@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Pose, POSE_CONNECTIONS, Results } from "@mediapipe/pose";
+import * as mpPose from "@mediapipe/pose";          // <— import the namespace
 import { Camera } from "@mediapipe/camera_utils";
 
 export default function CameraPose() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"idle"|"ok"|"error">("idle");
-  const [message, setMessage] = useState<string>("");
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     let cam: Camera | null = null;
@@ -14,11 +14,8 @@ export default function CameraPose() {
 
     async function start() {
       try {
-        if (!window.isSecureContext) {
-          throw new Error("This page must be served over HTTPS to access the camera.");
-        }
+        if (!window.isSecureContext) throw new Error("Page must be HTTPS.");
 
-        // 1) Ask for camera
         setStatus("idle"); setMessage("Requesting camera…");
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
@@ -27,22 +24,21 @@ export default function CameraPose() {
 
         const video = videoRef.current!;
         video.srcObject = stream;
-        // iOS/Safari/Chrome mobile quirks
         video.setAttribute("playsinline", "true");
-        video.muted = true; // allow autoplay
-        await video.play().catch(() => {/* swallow; will play after metadata */});
+        video.muted = true;
+        await video.play().catch(()=>{});
 
-        // Wait until we know video size
         if (video.readyState < 2) {
-          await new Promise<void>((res) => {
-            const onLoaded = () => { video.removeEventListener("loadedmetadata", onLoaded); res(); };
-            video.addEventListener("loadedmetadata", onLoaded);
+          await new Promise<void>(res => {
+            const onMeta = () => { video.removeEventListener("loadedmetadata", onMeta); res(); };
+            video.addEventListener("loadedmetadata", onMeta);
           });
         }
 
-        // 2) Init MediaPipe Pose
-        const pose = new Pose({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+        // ---- IMPORTANT: use mpPose.Pose and mpPose.POSE_CONNECTIONS ----
+        const pose = new mpPose.Pose({
+          locateFile: (file) =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`, // pin version
         });
         pose.setOptions({
           modelComplexity: 1,
@@ -52,14 +48,14 @@ export default function CameraPose() {
           minTrackingConfidence: 0.6,
         });
 
-        pose.onResults((res: Results) => {
+        pose.onResults((res: mpPose.Results) => {
           const canvas = canvasRef.current!;
           const ctx = canvas.getContext("2d")!;
-          const w = (video.videoWidth || 1280);
-          const h = (video.videoHeight || 720);
+          const w = video.videoWidth || 1280;
+          const h = video.videoHeight || 720;
           canvas.width = w; canvas.height = h;
 
-          // mirror frame
+          // draw mirrored video
           ctx.save();
           ctx.scale(-1, 1);
           ctx.drawImage(video, -w, 0, w, h);
@@ -68,7 +64,7 @@ export default function CameraPose() {
           if (res.poseLandmarks?.length) {
             const lm = res.poseLandmarks;
             ctx.lineWidth = 3; ctx.strokeStyle = "#76ff94";
-            for (const [a, b] of POSE_CONNECTIONS as Array<[number, number]>) {
+            for (const [a, b] of mpPose.POSE_CONNECTIONS as Array<[number, number]>) {
               const p1 = lm[a], p2 = lm[b]; if (!p1 || !p2) continue;
               ctx.beginPath();
               ctx.moveTo(p1.x * w, p1.y * h);
@@ -76,22 +72,12 @@ export default function CameraPose() {
               ctx.stroke();
             }
             ctx.fillStyle = "#4ad6ff";
-            for (const p of lm) {
-              ctx.beginPath();
-              ctx.arc(p.x * w, p.y * h, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
+            for (const p of lm) { ctx.beginPath(); ctx.arc(p.x*w, p.y*h, 4, 0, Math.PI*2); ctx.fill(); }
           }
         });
 
-        // 3) Start the MediaPipe camera helper
         cam = new Camera(video, {
-          onFrame: async () => {
-            if (!disposed) {
-              try { await pose.send({ image: video }); }
-              catch (err:any) { console.error(err); }
-            }
-          },
+          onFrame: async () => { if (!disposed) { try { await pose.send({ image: video }); } catch {} } },
           width: video.videoWidth || 1280,
           height: video.videoHeight || 720,
         });
@@ -106,13 +92,10 @@ export default function CameraPose() {
     }
 
     start();
-
     return () => {
       disposed = true;
       try { cam?.stop(); } catch {}
-      // stop tracks
-      const tracks = (videoRef.current?.srcObject as MediaStream | null)?.getTracks();
-      tracks?.forEach(t => { try { t.stop(); } catch {} });
+      (videoRef.current?.srcObject as MediaStream | null)?.getTracks()?.forEach(t => { try { t.stop(); } catch {} });
     };
   }, []);
 
