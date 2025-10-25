@@ -67,10 +67,6 @@ export function getLastFrameAt() { return useApp.getState().lastFrameAt; }
 export function addResult(r: Result) { return useApp.getState().addResult(r); }
 export function getHistory() { return useApp.getState().history; }
 export function setRunning(v: boolean) { return useApp.getState().setRunning(v); }
-// src/store.ts
-
-// ...existing code above...
-
 export function setLastPose(lm: PoseFrame) {
   return useApp.getState().setLastPose(lm);
 }
