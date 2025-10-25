@@ -98,7 +98,7 @@ export default function CameraPose() {
           // draw skeleton
           if (res.poseLandmarks?.length) {
             const lm = res.poseLandmarks;
-            ctx.lineWidth = 3; ctx.strokeStyle = "#76ff94";
+            ctx.lineWidth = 4; ctx.strokeStyle = "#2ce67e"; 
             for (const [a, b] of CONNECTIONS) {
               const p1 = lm[a], p2 = lm[b]; if (!p1 || !p2) continue;
               ctx.beginPath();
@@ -106,7 +106,7 @@ export default function CameraPose() {
               ctx.lineTo(p2.x * w, p2.y * h);
               ctx.stroke();
             }
-            ctx.fillStyle = "#4ad6ff";
+            ctx.fillStyle = "#2ec9ff";
             for (const p of lm) {
               ctx.beginPath();
               ctx.arc(p.x * w, p.y * h, 4, 0, Math.PI * 2);
