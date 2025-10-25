@@ -3,6 +3,6 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  server: { port: 5173 },
-  preview: { port: 5173 }
+  base: "/",           // important for Vercel; default is OK but set it explicitly
+  build: { outDir: "dist" }
 });
