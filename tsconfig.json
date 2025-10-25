@@ -3,3 +3,10 @@
   "build": "vite build",
   "preview": "vite preview"
 }
+{
+  "compilerOptions": {
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
