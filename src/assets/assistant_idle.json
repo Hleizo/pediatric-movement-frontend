@@ -1,0 +1,25 @@
+# Use any free Lottie JSON for an idle character. For now, this is a tiny placeholder animation.
+# You can replace this file with a richer one later.
+{
+"v": "5.8.1",
+"fr": 30,
+"ip": 0,
+"op": 90,
+"w": 600,
+"h": 300,
+"nm": "idle",
+"ddd": 0,
+"assets": [],
+"layers": [
+{"ddd":0,"ind":1,"ty":4,"nm":"circle","sr":1,"ks":{"o":{"a":0,"k":100},"r":{"a":1,"k":[{"t":0,"s":0},{"t":90,"s":360}]},"p":{"a":0,"k":[300,150,0]},"a":{"a":0,"k":[0,0,0]},"s":{"a":0,"k":[100,100,100]}},"shapes":[{"ty":"el","p":{"a":0,"k":[0,0]},"s":{"a":0,"k":[60,60]} ,"nm":"ellipse"},{"ty":"fl","c":{"a":0,"k":[0.29,0.84,1,1]},"o":{"a":0,"k":100},"nm":"fill"}],"ip":0,"op":90,"st":0,"bm":0}
+]
+}
+
+
+# ─────────────────────────────
+# .gitignore
+# ─────────────────────────────
+node_modules
+.dist
+.DS_Store
+.vscode
