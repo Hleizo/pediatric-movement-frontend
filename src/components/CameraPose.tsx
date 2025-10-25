@@ -1,9 +1,10 @@
+// src/components/CameraPose.tsx
 import React, { useEffect, useRef, useState } from "react";
+import { setLastPose, setRunning } from "../store";
 
-/** tiny helper to load a <script> only once */
+/** load a UMD <script> only once (for CDN MediaPipe Pose) */
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    // already loaded?
     if (document.querySelector(`script[src="${src}"]`)) return resolve();
     const s = document.createElement("script");
     s.src = src;
@@ -18,22 +19,27 @@ function loadScript(src: string): Promise<void> {
 export default function CameraPose() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
   const [status, setStatus] = useState<"idle" | "ok" | "error">("idle");
   const [message, setMessage] = useState("");
+  const [fps, setFps] = useState<number | null>(null);
 
   useEffect(() => {
     let stopped = false;
     let raf = 0;
+    let lastTs = performance.now();
+    let frameCount = 0;
 
     async function start() {
       try {
-        if (!window.isSecureContext)
+        if (!window.isSecureContext) {
           throw new Error("This page must be served over HTTPS to access the camera.");
+        }
 
         setStatus("idle");
         setMessage("Requesting camera…");
 
-        // 1) Get camera
+        // 1) Camera
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
           audio: false,
@@ -43,23 +49,20 @@ export default function CameraPose() {
         video.setAttribute("playsinline", "true");
         video.muted = true;
         await video.play();
-
         if (video.readyState < 2) {
           await new Promise<void>((res) => {
-            const on = () => { video.removeEventListener("loadedmetadata", on); res(); };
-            video.addEventListener("loadedmetadata", on);
+            const onMeta = () => { video.removeEventListener("loadedmetadata", onMeta); res(); };
+            video.addEventListener("loadedmetadata", onMeta);
           });
         }
 
-        // 2) Load MediaPipe Pose from CDN (UMD builds expose globals on window)
+        // 2) Load MediaPipe Pose UMD and use globals
         const CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404";
         await loadScript(`${CDN}/pose.js`);
 
         const PoseCtor = (window as any).Pose as any;
         const CONNECTIONS = (window as any).POSE_CONNECTIONS as Array<[number, number]>;
-        if (!PoseCtor || !CONNECTIONS) {
-          throw new Error("MediaPipe Pose global not found after loading pose.js");
-        }
+        if (!PoseCtor || !CONNECTIONS) throw new Error("MediaPipe Pose global not found.");
 
         const pose = new PoseCtor({
           locateFile: (file: string) => `${CDN}/${file}`,
@@ -72,21 +75,22 @@ export default function CameraPose() {
           minTrackingConfidence: 0.6,
         });
 
-        // 3) Simple processing loop (no @mediapipe/camera_utils needed)
         const canvas = canvasRef.current!;
         const ctx = canvas.getContext("2d")!;
 
-        async function tick() {
-          if (stopped) return;
-          try {
-            await pose.send({ image: video });
-          } catch (e) {
-            // ignore sporadic send() errors
-          }
-          raf = requestAnimationFrame(tick);
-        }
-
         pose.onResults((res: any) => {
+          // share landmarks via store
+          setLastPose(res.poseLandmarks ?? null);
+
+          // simple FPS calc
+          frameCount++;
+          const now = performance.now();
+          if (now - lastTs >= 1000) {
+            setFps(frameCount);
+            frameCount = 0;
+            lastTs = now;
+          }
+
           const w = video.videoWidth || 1280;
           const h = video.videoHeight || 720;
           canvas.width = w; canvas.height = h;
@@ -97,9 +101,11 @@ export default function CameraPose() {
           ctx.drawImage(video, -w, 0, w, h);
           ctx.restore();
 
-          // skeleton
+          // draw skeleton if available
           if (res.poseLandmarks?.length) {
             const lm = res.poseLandmarks;
+
+            // connections
             ctx.lineWidth = 3; ctx.strokeStyle = "#76ff94";
             for (const [a, b] of CONNECTIONS) {
               const p1 = lm[a], p2 = lm[b]; if (!p1 || !p2) continue;
@@ -108,6 +114,7 @@ export default function CameraPose() {
               ctx.lineTo(p2.x * w, p2.y * h);
               ctx.stroke();
             }
+            // keypoints
             ctx.fillStyle = "#4ad6ff";
             for (const p of lm) {
               ctx.beginPath();
@@ -117,11 +124,20 @@ export default function CameraPose() {
           }
         });
 
+        // 3) Simple loop (no camera_utils)
+        const tick = async () => {
+          if (stopped) return;
+          try { await pose.send({ image: video }); } catch {}
+          raf = requestAnimationFrame(tick);
+        };
+
+        setRunning(true);
         setStatus("ok");
         setMessage("");
         tick();
       } catch (err: any) {
         console.error("[CameraPose] error", err);
+        setRunning(false);
         setStatus("error");
         setMessage(err?.message || String(err));
       }
@@ -131,9 +147,10 @@ export default function CameraPose() {
 
     return () => {
       stopped = true;
+      setRunning(false);
       cancelAnimationFrame(raf);
-      const stream = videoRef.current?.srcObject as MediaStream | null;
-      stream?.getTracks()?.forEach((t) => t.stop());
+      const tracks = (videoRef.current?.srcObject as MediaStream | null)?.getTracks();
+      tracks?.forEach((t) => t.stop());
     };
   }, []);
 
@@ -141,6 +158,27 @@ export default function CameraPose() {
     <div style={{ position: "relative", width: "100%", maxWidth: 900 }}>
       <video ref={videoRef} playsInline muted style={{ width: "100%", display: "block" }} />
       <canvas ref={canvasRef} style={{ position: "absolute", inset: 0 }} />
+
+      {/* Status badge */}
+      {status === "ok" && (
+        <div
+          style={{
+            position: "absolute",
+            top: 10,
+            left: 10,
+            background: "rgba(0,0,0,.55)",
+            color: "#fff",
+            padding: "6px 10px",
+            borderRadius: 8,
+            fontFamily: "system-ui, Arial",
+            fontSize: 13,
+          }}
+        >
+          Model ready {fps !== null ? `• ~${fps} fps` : ""}
+        </div>
+      )}
+
+      {/* Loading / Error overlay */}
       {status !== "ok" && (
         <div
           style={{
@@ -169,4 +207,3 @@ export default function CameraPose() {
     </div>
   );
 }
-

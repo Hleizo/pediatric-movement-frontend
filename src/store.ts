@@ -1,21 +1,35 @@
-import { create } from 'zustand'
+// src/store.ts
+// Tiny, dependency-free store for sharing pose data across components.
 
+export type Landmark = { x: number; y: number; z?: number; visibility?: number };
+export type PoseFrame = Landmark[] | null;
 
-export type Landmark = { x:number; y:number; z?:number; c?:number }
-export type Frame = { t:number; lm:Record<string,Landmark> }
+let _lastPose: PoseFrame = null;
+let _lastFrameAt = 0;
+let _running = false;
+let _task: "idle" | "one_leg" | "walk" | "arm_raise" = "idle";
 
-
-type State = {
-running: boolean
-task: 'idle'|'one_leg'|'walk'|'arm_raise'
-landmarks: Record<string,Landmark>
-lastFrameAt: number
+export function setLastPose(lm: PoseFrame) {
+  _lastPose = lm;
+  _lastFrameAt = Date.now();
+}
+export function getLastPose(): PoseFrame {
+  return _lastPose;
+}
+export function getLastFrameAt(): number {
+  return _lastFrameAt;
 }
 
+export function setRunning(v: boolean) {
+  _running = v;
+}
+export function isRunning(): boolean {
+  return _running;
+}
 
-export const useApp = create<State>(()=>({
-running: false,
-task: 'idle',
-landmarks: {},
-lastFrameAt: 0,
-}))
+export function setTask(t: "idle" | "one_leg" | "walk" | "arm_raise") {
+  _task = t;
+}
+export function getTask(): "idle" | "one_leg" | "walk" | "arm_raise" {
+  return _task;
+}
