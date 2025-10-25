@@ -1,8 +1,7 @@
-// src/components/CameraPose.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { setLastPose, setRunning } from "../store";
 
-/** load a UMD <script> only once (for CDN MediaPipe Pose) */
+/** load a UMD <script> once (CDN MediaPipe Pose) */
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) return resolve();
@@ -49,14 +48,8 @@ export default function CameraPose() {
         video.setAttribute("playsinline", "true");
         video.muted = true;
         await video.play();
-        if (video.readyState < 2) {
-          await new Promise<void>((res) => {
-            const onMeta = () => { video.removeEventListener("loadedmetadata", onMeta); res(); };
-            video.addEventListener("loadedmetadata", onMeta);
-          });
-        }
 
-        // 2) Load MediaPipe Pose UMD and use globals
+        // 2) MediaPipe Pose via CDN (UMD globals)
         const CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404";
         await loadScript(`${CDN}/pose.js`);
 
@@ -64,9 +57,7 @@ export default function CameraPose() {
         const CONNECTIONS = (window as any).POSE_CONNECTIONS as Array<[number, number]>;
         if (!PoseCtor || !CONNECTIONS) throw new Error("MediaPipe Pose global not found.");
 
-        const pose = new PoseCtor({
-          locateFile: (file: string) => `${CDN}/${file}`,
-        });
+        const pose = new PoseCtor({ locateFile: (f: string) => `${CDN}/${f}` });
         pose.setOptions({
           modelComplexity: 1,
           smoothLandmarks: true,
@@ -79,10 +70,10 @@ export default function CameraPose() {
         const ctx = canvas.getContext("2d")!;
 
         pose.onResults((res: any) => {
-          // share landmarks via store
+          // store landmarks
           setLastPose(res.poseLandmarks ?? null);
 
-          // simple FPS calc
+          // FPS
           frameCount++;
           const now = performance.now();
           if (now - lastTs >= 1000) {
@@ -91,21 +82,22 @@ export default function CameraPose() {
             lastTs = now;
           }
 
-          const w = video.videoWidth || 1280;
-          const h = video.videoHeight || 720;
-          canvas.width = w; canvas.height = h;
+          // ensure canvas matches panel box
+          const box = canvas.parentElement!.getBoundingClientRect();
+          const w = Math.round(box.width);
+          const h = Math.round(box.height);
+          if (canvas.width !== w) canvas.width = w;
+          if (canvas.height !== h) canvas.height = h;
 
-          // draw mirrored video
+          // draw mirrored video scaled to panel
           ctx.save();
           ctx.scale(-1, 1);
           ctx.drawImage(video, -w, 0, w, h);
           ctx.restore();
 
-          // draw skeleton if available
+          // draw skeleton
           if (res.poseLandmarks?.length) {
             const lm = res.poseLandmarks;
-
-            // connections
             ctx.lineWidth = 3; ctx.strokeStyle = "#76ff94";
             for (const [a, b] of CONNECTIONS) {
               const p1 = lm[a], p2 = lm[b]; if (!p1 || !p2) continue;
@@ -114,7 +106,6 @@ export default function CameraPose() {
               ctx.lineTo(p2.x * w, p2.y * h);
               ctx.stroke();
             }
-            // keypoints
             ctx.fillStyle = "#4ad6ff";
             for (const p of lm) {
               ctx.beginPath();
@@ -155,50 +146,20 @@ export default function CameraPose() {
   }, []);
 
   return (
-    <div style={{ position: "relative", width: "100%", maxWidth: 900 }}>
-      <video ref={videoRef} playsInline muted style={{ width: "100%", display: "block" }} />
-      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0 }} />
-
-      {/* Status badge */}
+    <div className="panel">
+      <video ref={videoRef} playsInline muted />
+      <canvas ref={canvasRef} />
       {status === "ok" && (
-        <div
-          style={{
-            position: "absolute",
-            top: 10,
-            left: 10,
-            background: "rgba(0,0,0,.55)",
-            color: "#fff",
-            padding: "6px 10px",
-            borderRadius: 8,
-            fontFamily: "system-ui, Arial",
-            fontSize: 13,
-          }}
-        >
-          Model ready {fps !== null ? `• ~${fps} fps` : ""}
-        </div>
+        <div className="badge">Model ready {fps !== null ? `• ~${fps} fps` : ""}</div>
       )}
-
-      {/* Loading / Error overlay */}
       {status !== "ok" && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "grid",
-            placeItems: "center",
-            background: "rgba(0,0,0,.45)",
-            color: "#fff",
-            textAlign: "center",
-            padding: 16,
-            fontFamily: "system-ui, Arial",
-          }}
-        >
+        <div className="overlay">
           <div>
             <div style={{ fontSize: 18, marginBottom: 8 }}>
               {status === "idle" ? "Preparing camera…" : "Camera error"}
             </div>
-            {!!message && <div style={{ fontSize: 14, opacity: 0.9 }}>{message}</div>}
-            <div style={{ fontSize: 13, opacity: 0.8, marginTop: 8 }}>
+            {!!message && <div style={{ fontSize: 14, opacity: .9 }}>{message}</div>}
+            <div style={{ fontSize: 13, opacity: .8, marginTop: 8 }}>
               If permission is blocked, click the 🔒 in the address bar → allow camera, then refresh.
             </div>
           </div>
