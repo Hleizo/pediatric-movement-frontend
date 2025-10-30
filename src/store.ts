@@ -1,72 +1,46 @@
 import { create } from "zustand";
 
-/** --------- Pose Types --------- */
-export type Landmark = { x: number; y: number; z?: number; c?: number };
-export type PoseFrame = Landmark[] | null;
+/* ---------- Types ---------- */
 
-/** --------- Tasks & Results --------- */
-export type Task = "arm_raise_right" | "arm_raise_left";
+export type TaskKey = "arm_raise_right" | "arm_raise_left";
 
-export type Result = {
+export type ResultEntry = {
   id: string;
-  ts: number;                 // timestamp ms
-  task: Task;
-  value: number;              // 1/0 for pass/fail
-  units: string;              // "-" for boolean
-  status: "pass" | "warn" | "fail";
+  ts: number;               // timestamp (ms)
+  task: TaskKey;
+  value: number;            // numeric score / 0|1
+  units: string;            // "-", "s", etc.
+  status: "pass" | "fail";
   note?: string;
 };
 
-type State = {
-  running: boolean;
-  lastPose: PoseFrame;
-  lastFrameAt: number | null;
-  history: Result[];
-
-  setRunning: (v: boolean) => void;
-  setLastPose: (lm: PoseFrame) => void;
-  setLastFrameAt: (t: number) => void;
-
-  addResult: (r: Result) => void;
-  clearHistory: () => void;
+type AppState = {
+  results: ResultEntry[];
+  addResult: (r: ResultEntry) => void;
+  clearResults: () => void;
 };
 
-// ---- localStorage persistence ----
-const KEY = "pm_app_history_v1";
-function loadHistory(): Result[] {
-  try {
-    const s = localStorage.getItem(KEY);
-    return s ? JSON.parse(s) : [];
-  } catch { return []; }
-}
-function saveHistory(list: Result[]) {
-  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch {}
-}
+/* ---------- Store ---------- */
 
-export const useApp = create<State>((set, get) => ({
-  running: false,
-  lastPose: null,
-  lastFrameAt: null,
-  history: loadHistory(),
-
-  setRunning: (v) => set({ running: v }),
-  setLastPose: (lm) => set({ lastPose: lm, lastFrameAt: Date.now() }),
-  setLastFrameAt: (t) => set({ lastFrameAt: t }),
-
-  addResult: (r) => {
-    const list = [...get().history, r].slice(-200);
-    saveHistory(list);
-    set({ history: list });
-  },
-  clearHistory: () => { saveHistory([]); set({ history: [] }); },
+export const useAppStore = create<AppState>((set) => ({
+  results: [],
+  addResult: (r) =>
+    set((s) => ({ results: [...s.results, r] })),
+  clearResults: () => set({ results: [] }),
 }));
 
-/** Non-hook helpers */
-export function getLastPose() { return useApp.getState().lastPose; }
-export function getLastFrameAt() { return useApp.getState().lastFrameAt; }
-export function addResult(r: Result) { return useApp.getState().addResult(r); }
-export function getHistory() { return useApp.getState().history; }
-export function setRunning(v: boolean) { return useApp.getState().setRunning(v); }
-export function setLastPose(lm: PoseFrame) {
-  return useApp.getState().setLastPose(lm);
+/* ---------- Helpers (optional) ---------- */
+/* If you already have pose helpers elsewhere, keep those; these are no-ops
+   so this file compiles even if other components import them. Remove if not used. */
+
+export type Landmark = { x: number; y: number; z?: number; visibility?: number };
+export type PoseForApp = { landmarks?: Landmark[] } | null;
+
+let _lastPose: PoseForApp = null;
+
+export function setLastPose(p: PoseForApp) {
+  _lastPose = p;
+}
+export function getLastPose(): PoseForApp {
+  return _lastPose;
 }

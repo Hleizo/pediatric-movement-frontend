@@ -1,205 +1,245 @@
 import React, { useEffect, useRef, useState } from "react";
-import { setLastPose, setRunning } from "../store";
+import { FilesetResolver, PoseLandmarker, DrawingUtils } from "@mediapipe/tasks-vision";
+import type { PoseForApp, Landmark } from "../metrics";
 
-/** Load a UMD <script> once (CDN MediaPipe Pose) */
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = document.createElement("script");
-    s.src = src;
-    s.async = true;
-    s.crossOrigin = "anonymous";
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`Failed to load: ${src}`));
-    document.head.appendChild(s);
-  });
-}
+type Props = {
+  onPose?: (pose: PoseForApp) => void;
+  onReady?: () => void;
+  onError?: (msg: string) => void;
+};
 
-export default function CameraPose() {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+/** Stable Google-hosted model (don’t fetch .task from a CDN mirror) */
+const MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 
-  const [status, setStatus] = useState<"idle" | "ok" | "error">("idle");
-  const [message, setMessage] = useState("");
-  const [fps, setFps] = useState<number | null>(null);
+const WASM_BASE =
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 
-  // Stable panel size (16:9) – updated only on container width changes
-  const sizeRef = useRef({ w: 0, h: 0 });
+/** Use a modest working size for smoothness */
+const DETECT_W = 480;
+const DETECT_H = 360;
+
+/** ~15–20 FPS is plenty for demo and keeps laptops cool */
+const DETECT_INTERVAL_MS = 66;
+
+export default function CameraPose({ onPose, onReady, onError }: Props) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const landmarkerRef = useRef<PoseLandmarker | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const lastDetectRef = useRef<number>(0);
+
+  const [status, setStatus] = useState("Starting camera…");
+  const [needsUserStart, setNeedsUserStart] = useState(false);
+
+  /** Cleanly stop everything */
+  function stopAll() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    landmarkerRef.current?.close?.();
+    landmarkerRef.current = null;
+    streamRef.current?.getTracks?.().forEach((t) => t.stop());
+    streamRef.current = null;
+    onPose?.(null);
+  }
+
   useEffect(() => {
-    const el = panelRef.current!;
-    const ro = new ResizeObserver((entries) => {
-      const w = Math.round(entries[0].contentRect.width);
-      const h = Math.round((w * 9) / 16); // 16:9 aspect
-      sizeRef.current = { w, h };
-      el.style.height = `${h}px`; // <— fixed CSS height so layout is stable
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    let cancelled = false;
 
-  useEffect(() => {
-    let stopped = false;
-    let raf = 0;
-    let lastTs = performance.now();
-    let frameCount = 0;
-
-    async function start() {
+    async function startCamera() {
       try {
-        if (!window.isSecureContext) {
-          throw new Error("This page must be served over HTTPS to access the camera.");
-        }
-
-        setStatus("idle");
-        setMessage("Requesting camera…");
-
-        // 1) Camera
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+          video: { facingMode: "user", width: DETECT_W, height: DETECT_H },
           audio: false,
         });
+        if (cancelled) return;
+
+        streamRef.current = stream;
         const video = videoRef.current!;
         video.srcObject = stream;
-        video.setAttribute("playsinline", "true");
-        video.muted = true;
-        await video.play();
 
-        // 2) MediaPipe Pose via CDN (UMD globals)
-        const CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404";
-        await loadScript(`${CDN}/pose.js`);
-
-        const PoseCtor = (window as any).Pose as any;
-        const CONNECTIONS = (window as any).POSE_CONNECTIONS as Array<[number, number]>;
-        if (!PoseCtor || !CONNECTIONS) throw new Error("MediaPipe Pose global not found.");
-
-        const pose = new PoseCtor({ locateFile: (f: string) => `${CDN}/${f}` });
-        pose.setOptions({
-          modelComplexity: 1,
-          smoothLandmarks: true,
-          enableSegmentation: false,
-          minDetectionConfidence: 0.6,
-          minTrackingConfidence: 0.6,
+        // Wait for metadata so width/height are known
+        await new Promise<void>((resolve) => {
+          if (video.readyState >= 1) resolve();
+          else video.onloadedmetadata = () => resolve();
         });
 
-        const canvas = canvasRef.current!;
-        const ctx = canvas.getContext("2d")!;
-
-        function resizeCanvasToPanel() {
-          const { w, h } = sizeRef.current;
-          // CSS size: fixed (does not affect layout)
-          canvas.style.width = w + "px";
-          canvas.style.height = h + "px";
-          // Internal resolution: device pixel ratio for sharpness
-          const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); // clamp 1–2
-          canvas.width = Math.round(w * dpr);
-          canvas.height = Math.round(h * dpr);
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+        // Try autoplay; if blocked, show Start button
+        try {
+          await video.play();
+          setNeedsUserStart(false);
+        } catch {
+          setNeedsUserStart(true);
         }
 
-        pose.onResults((res: any) => {
-          // ensure canvas matches current panel size (cheap)
-          resizeCanvasToPanel();
-
-          // share landmarks
-          setLastPose(res.poseLandmarks ?? null);
-
-          // FPS
-          frameCount++;
-          const now = performance.now();
-          if (now - lastTs >= 1000) {
-            setFps(frameCount);
-            frameCount = 0;
-            lastTs = now;
-          }
-
-          const { w, h } = sizeRef.current;
-
-          // draw mirrored video scaled to panel
-          ctx.save();
-          ctx.clearRect(0, 0, w, h);
-          ctx.scale(-1, 1);
-          ctx.drawImage(video, -w, 0, w, h);
-          ctx.restore();
-
-          // draw skeleton
-          if (res.poseLandmarks?.length) {
-            const lm = res.poseLandmarks;
-            ctx.lineWidth = 4; ctx.strokeStyle = "#2ce67e";
-            for (const [a, b] of CONNECTIONS) {
-              const p1 = lm[a], p2 = lm[b]; if (!p1 || !p2) continue;
-              ctx.beginPath();
-              ctx.moveTo(p1.x * w, p1.y * h);
-              ctx.lineTo(p2.x * w, p2.y * h);
-              ctx.stroke();
-            }
-            ctx.fillStyle = "#2ec9ff";
-            for (const p of lm) {
-              ctx.beginPath();
-              ctx.arc(p.x * w, p.y * h, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
-          }
-        });
-
-        // 3) Loop – no layout reads here
-        const tick = async () => {
-          if (stopped) return;
-          try { await pose.send({ image: video }); } catch {}
-          raf = requestAnimationFrame(tick);
-        };
-
-        setRunning(true);
-        setStatus("ok");
-        setMessage("");
-        tick();
-      } catch (err: any) {
-        console.error("[CameraPose] error", err);
-        setRunning(false);
-        setStatus("error");
-        setMessage(err?.message || String(err));
+        setStatus("Camera running ✓");
+      } catch (e: any) {
+        const msg = typeof e?.message === "string" ? e.message : String(e);
+        setStatus(`Error: ${msg}`);
+        onError?.(msg);
       }
     }
 
-    start();
+    async function loadModel() {
+      try {
+        setStatus((s) => s + " • loading pose model…");
+        const files = await FilesetResolver.forVisionTasks(WASM_BASE);
+        landmarkerRef.current = await PoseLandmarker.createFromOptions(files, {
+          baseOptions: { modelAssetPath: MODEL_URL },
+          runningMode: "VIDEO",
+          numPoses: 1,
+          minPoseDetectionConfidence: 0.5,
+          minPosePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+        if (!cancelled) setStatus("Camera + pose running ✓");
+        onReady?.();
+      } catch (e: any) {
+        const msg = typeof e?.message === "string" ? e.message : String(e);
+        setStatus(`Error: ${msg}`);
+        onError?.(msg);
+      }
+    }
+
+    function ensureCanvasSize() {
+      const c = canvasRef.current;
+      if (!c) return;
+      c.width = DETECT_W;
+      c.height = DETECT_H;
+    }
+
+    function loop() {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const landmarker = landmarkerRef.current;
+
+      if (!video || !canvas || !landmarker) {
+        rafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      // If camera not actually playing, just keep waiting
+      if (video.paused || video.ended || video.readyState < 2) {
+        rafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      const now = performance.now();
+      if (now - lastDetectRef.current >= DETECT_INTERVAL_MS) {
+        lastDetectRef.current = now;
+
+        const result = landmarker.detectForVideo(video, now);
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.save();
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          // Draw the live camera frame at the SAME size we detect → no warp
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          if (result?.landmarks?.length) {
+            const utils = new DrawingUtils(ctx);
+            result.landmarks.forEach((lm) => {
+              utils.drawLandmarks(lm, { radius: 3, color: "#33E6FF" });
+              utils.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, {
+                color: "#29c76f",
+                lineWidth: 3,
+              });
+            });
+          }
+          ctx.restore();
+        }
+
+        const first: PoseForApp =
+          result?.landmarks?.[0] ? { landmarks: result.landmarks[0] as Landmark[] } : null;
+        onPose?.(first);
+      }
+
+      rafRef.current = requestAnimationFrame(loop);
+    }
+
+    // Start
+    ensureCanvasSize();
+    startCamera().then(loadModel);
+    rafRef.current = requestAnimationFrame(loop);
+
+    // Pause loop when tab hidden; resume when visible
+    function onVis() {
+      if (document.hidden) {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      } else if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(loop);
+      }
+    }
+    document.addEventListener("visibilitychange", onVis);
 
     return () => {
-      stopped = true;
-      setRunning(false);
-      cancelAnimationFrame(raf);
-      const tracks = (videoRef.current?.srcObject as MediaStream | null)?.getTracks();
-      tracks?.forEach((t) => t.stop());
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      stopAll();
     };
-  }, []);
+  }, [onPose, onReady, onError]);
+
+  async function handleUserStart() {
+    try {
+      await videoRef.current?.play();
+      setNeedsUserStart(false);
+    } catch (e: any) {
+      const msg = typeof e?.message === "string" ? e.message : String(e);
+      setStatus(`Error: ${msg}`);
+      onError?.(msg);
+    }
+  }
 
   return (
-    <div ref={panelRef} className="panel" style={{ position: "relative" }}>
-      {/* Absolutely positioned media – cannot change layout height */}
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-      />
+    <div style={{ position: "relative", width: 540, maxWidth: "100%" }}>
+      <video ref={videoRef} muted playsInline style={{ display: "none" }} />
       <canvas
         ref={canvasRef}
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+        style={{
+          width: "100%",
+          height: "auto",
+          borderRadius: 12,
+          boxShadow: "0 6px 24px rgba(0,0,0,.15)",
+          background: "#000",
+        }}
       />
-
-      {status === "ok" && (
-        <div className="badge">Model ready {fps !== null ? `• ~${fps} fps` : ""}</div>
-      )}
-      {status !== "ok" && (
-        <div className="overlay">
-          <div>
-            <div style={{ fontSize: 18, marginBottom: 8 }}>
-              {status === "idle" ? "Preparing camera…" : "Camera error"}
-            </div>
-            {!!message && <div style={{ fontSize: 14, opacity: .9 }}>{message}</div>}
-            <div style={{ fontSize: 13, opacity: .8, marginTop: 8 }}>
-              If permission is blocked, click the 🔒 in the address bar → allow camera, then refresh.
-            </div>
-          </div>
-        </div>
+      {/* Status pill */}
+      <div
+        style={{
+          position: "absolute",
+          left: 8,
+          bottom: 8,
+          background: "rgba(0,0,0,.55)",
+          color: "#fff",
+          padding: "6px 10px",
+          borderRadius: 8,
+          fontSize: 13,
+        }}
+      >
+        {status}
+      </div>
+      {/* Autoplay fallback button (only shows when needed) */}
+      {needsUserStart && (
+        <button
+          onClick={handleUserStart}
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%,-50%)",
+            padding: "10px 16px",
+            borderRadius: 10,
+            border: "1px solid #ccc",
+            boxShadow: "0 10px 24px rgba(0,0,0,.2)",
+            background: "#fff",
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+        >
+          Start camera
+        </button>
       )}
     </div>
   );

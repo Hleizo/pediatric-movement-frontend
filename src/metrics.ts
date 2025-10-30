@@ -1,35 +1,31 @@
-import type { Landmark, PoseFrame as PoseFrameType } from "./store";
+// src/metrics.ts
+export type Landmark = { x: number; y: number; z?: number; visibility?: number };
+export type PoseForApp = { landmarks?: Landmark[] } | null;
 
-/** Safe landmark read */
-export function L(lm: PoseFrameType, i: number): Landmark | undefined {
-  if (!lm || !lm[i]) return undefined;
-  return lm[i];
+/** Mediapipe indices (33 landmarks) */
+const IDX = {
+  NOSE: 0,
+  LEFT_SHOULDER: 11,
+  RIGHT_SHOULDER: 12,
+  LEFT_WRIST: 15,
+  RIGHT_WRIST: 16,
+};
+
+/** y is normalized (0..1). Smaller y == higher on screen. */
+export function isRightArmRaised(pose: PoseForApp): boolean {
+  const lm = pose?.landmarks;
+  if (!lm) return false;
+  const rs = lm[IDX.RIGHT_SHOULDER];
+  const rw = lm[IDX.RIGHT_WRIST];
+  if (!rs || !rw) return false;
+  return rw.y < rs.y - 0.03; // small margin
 }
 
-/** 2D angle in degrees (utility if needed later) */
-export function angle(A: Landmark, B: Landmark, C: Landmark): number {
-  const ba = { x: A.x - B.x, y: A.y - B.y };
-  const bc = { x: C.x - B.x, y: C.y - B.y };
-  const dot = ba.x * bc.x + ba.y * bc.y;
-  const m1 = Math.hypot(ba.x, ba.y);
-  const m2 = Math.hypot(bc.x, bc.y);
-  if (!m1 || !m2) return 0;
-  const c = Math.max(-1, Math.min(1, dot / (m1 * m2)));
-  return (Math.acos(c) * 180) / Math.PI;
-}
-
-/** Right arm raised? wrist above shoulder (y smaller) */
-export function isRightArmRaised(lm: PoseFrameType): boolean | null {
-  const RIGHT_WRIST = 16, RIGHT_SHOULDER = 12;
-  const w = L(lm, RIGHT_WRIST), s = L(lm, RIGHT_SHOULDER);
-  if (!w || !s) return null;
-  return w.y < s.y;
-}
-
-/** Left arm raised? wrist above shoulder (y smaller) */
-export function isLeftArmRaised(lm: PoseFrameType): boolean | null {
-  const LEFT_WRIST = 15, LEFT_SHOULDER = 11;
-  const w = L(lm, LEFT_WRIST), s = L(lm, LEFT_SHOULDER);
-  if (!w || !s) return null;
-  return w.y < s.y;
+export function isLeftArmRaised(pose: PoseForApp): boolean {
+  const lm = pose?.landmarks;
+  if (!lm) return false;
+  const ls = lm[IDX.LEFT_SHOULDER];
+  const lw = lm[IDX.LEFT_WRIST];
+  if (!ls || !lw) return false;
+  return lw.y < ls.y - 0.03; // small margin
 }
